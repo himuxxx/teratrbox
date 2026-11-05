@@ -1,5 +1,5 @@
 # api/index.py — Terabox -> Telegram bot (multi-source, Vercel serverless)
-# tier1: terabox.hnn.workers.dev (free worker, zero-config)
+# tier1: terabox-worker.robinkumarshakya103.workers.dev (free public worker)
 # tier2: terabox.com/share/list with optional ndus cookie
 # tier3: solver proxy (teraboxdl.site) if SOLVER_URL set
 
@@ -28,16 +28,16 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 BOT_TOKEN      = "8426186448:AAEJCf9mGHyZydX1TaJRWLRzvn50SlUyQw8"
 WEBHOOK_SECRET = "tb_71x_smith_secret"
 
-# Optional: paste "ndus=..." cookie value from your own terabox.com login
-# (browser -> devtools -> Application -> Cookies -> terabox.com -> ndus)
+# Optional — paste "ndus=..." from terabox.com login cookie
+# browser -> devtools -> Application -> Cookies -> terabox.com -> ndus
 TERABOX_COOKIE = ""
 
-# Optional: remote solver (teraboxdl.site proxy) — needs VPS, not Vercel
+# Optional — remote solver (needs VPS, not Vercel)
 SOLVER_URL = ""
 TB_BASE    = "https://teraboxdl.site"
 TS_SITEKEY = "0x4AAAAAAFZJOCzA6dP3BIYH"
 
-HNN_API = "https://terabox.hnn.workers.dev/api/get-info"
+HNN_API = "https://terabox-worker.robinkumarshakya103.workers.dev/api"
 
 UA = ("Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/137.0.0.0 Mobile Safari/537.36")
@@ -145,43 +145,42 @@ def _file_from_any(f: dict) -> Optional[dict]:
     direct = _pick(f, "dlink", "downloadLink", "download_link",
                    "download_url", "download", default="N/A")
     stream = _pick(f, "stream_url", "streaming_link", "play_url",
-                   "streamUrl", default="N/A")
+                   "streamUrl", "streaming_url", default="N/A")
     return {"name": str(name), "size": str(size),
             "direct": str(direct), "stream": str(stream)}
 
 # ================================================================
 # tier 1 — public free worker
 # ================================================================
-def fetch_via_hnn(share_url: str) -> list[dict]:
-    parts = parse_share_url(share_url)
-    params = {"shorturl": parts["shorturl"]}
-    if parts["pwd"]:
-        params["pwd"] = parts["pwd"]
-    r = requests.get(HNN_API, params=params, timeout=HTTP_TIMEOUT,
-                     headers={"User-Agent": UA})
+def fetch_via_worker(share_url: str) -> list[dict]:
+    r = requests.get(
+        HNN_API,
+        params={"url": share_url},
+        timeout=HTTP_TIMEOUT,
+        headers={"User-Agent": UA},
+    )
     r.raise_for_status()
     j = r.json()
 
-    if j.get("ok") is False or j.get("success") is False:
-        raise RuntimeError(j.get("message") or j.get("error") or "worker said not ok")
-    if j.get("errno", 0) not in (0, None):
-        raise RuntimeError(f"worker errno {j.get('errno')}: {j.get('errmsg') or ''}")
+    if not j.get("success"):
+        raise RuntimeError(j.get("error") or "worker returned success=false")
 
-    files = []
-    items = j.get("list") or j.get("files") or j.get("file_list") or []
-    if isinstance(items, list) and items:
-        for it in items:
-            parsed = _file_from_any(it)
-            if parsed:
-                files.append(parsed)
-    else:
-        parsed = _file_from_any(j)
-        if parsed:
-            files.append(parsed)
+    files_raw = j.get("files") or []
+    out: list[dict] = []
+    for f in files_raw:
+        if not isinstance(f, dict):
+            continue
+        name = f.get("file_name") or f.get("filename") or "unknown"
+        size = f.get("size") or human_size(f.get("file_size"))
+        direct = (f.get("download_url") or f.get("original_download_url")
+                  or f.get("download_link") or "N/A")
+        stream = f.get("streaming_url") or f.get("play_url") or "N/A"
+        out.append({"name": str(name), "size": str(size),
+                    "direct": str(direct), "stream": str(stream)})
 
-    if not files:
-        raise RuntimeError("worker returned empty list")
-    return files
+    if not out:
+        raise RuntimeError("worker returned empty file list")
+    return out
 
 # ================================================================
 # tier 2 — cookie direct (terabox.com/share/list, recursive)
@@ -286,9 +285,9 @@ def fetch_share_meta(share_url: str) -> list[dict]:
     errors: list[str] = []
 
     try:
-        return fetch_via_hnn(share_url)
+        return fetch_via_worker(share_url)
     except Exception as e:
-        LOG.warning("hnn worker failed: %s", e)
+        LOG.warning("worker failed: %s", e)
         errors.append(f"worker: {e}")
 
     try:
@@ -429,7 +428,7 @@ async def root():
 
 @app.get("/api/test")
 async def test_extract(url: str):
-    """Browser-test: hit with ?url=<terabox share url>. Returns raw JSON."""
+    """Browser-test: /api/test?url=<terabox share url>. Returns raw JSON."""
     try:
         files = fetch_share_meta(url)
         return {"ok": True, "count": len(files), "files": files}
