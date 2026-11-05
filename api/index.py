@@ -1,4 +1,4 @@
-# api/index.py — Terabox -> Telegram bot (solver-only path, polished UI)
+# api/index.py — Terabox -> Telegram bot (solver-only path, clean UI)
 # flow: solver /solve -> teraboxdl.site /api/verify -> /api/proxy
 
 import html
@@ -174,16 +174,14 @@ def fetch_share_meta(share_url: str) -> list[dict]:
     return files
 
 # ================================================================
-# render — polished cards
+# render — clean centered layout
 # ================================================================
 def render_chunk(chunk, offset, total) -> tuple[str, InlineKeyboardMarkup]:
     pages = max(1, (total + CHUNK - 1) // CHUNK)
     page = offset // CHUNK + 1
 
     lines = [
-        "┏━━━━━━━━━━━━━━━━━━━━━━━━━┓",
-        "┃   🔥 <b>T E R A B O X</b> 🔥   ┃",
-        "┗━━━━━━━━━━━━━━━━━━━━━━━━━┛",
+        "          🔥 <b>T E R A B O X</b> 🔥          ",
         "",
     ]
 
@@ -211,11 +209,9 @@ def render_chunk(chunk, offset, total) -> tuple[str, InlineKeyboardMarkup]:
 
         row = []
         if dl and dl != "N/A":
-            # fully colored emoji + bold text
             row.append(InlineKeyboardButton(
                 text="📥 Download Now", url=dl))
         if st and st != "N/A":
-            # fully colored emoji + bold text
             row.append(InlineKeyboardButton(
                 text="🎬 Stream Now", url=st))
         if row:
@@ -242,15 +238,10 @@ dp.include_router(router)
 @router.message(CommandStart())
 async def cmd_start(msg: Message):
     await msg.answer(
-        "┏━━━━━━━━━━━━━━━━━━━━━━━━━┓\n"
-        "┃   🔥 <b>T E R A B O X</b> 🔥   ┃\n"
-        "┗━━━━━━━━━━━━━━━━━━━━━━━━━┛\n"
-        "\n"
-        "  <b>drop a share link. get links.</b>\n"
-        "\n"
+        "          🔥 <b>T E R A B O X</b> 🔥          \n\n"
+        "  <b>drop a share link. get links.</b>\n\n"
         "  🔵  <b>Download Now</b>  —  save file\n"
-        "  🔴  <b>Stream Now</b>    —  play instantly\n"
-        "\n"
+        "  🔴  <b>Stream Now</b>    —  play instantly\n\n"
         "  <i>supported: terabox.com · 1024terabox.com\n"
         "  terabox.app · freeterabox.com · 4funbox.com</i>",
         parse_mode=ParseMode.HTML,
@@ -281,7 +272,6 @@ async def on_text(msg: Message):
         return
     COOLDOWN_BY_UID[uid] = now
 
-    # simple processing text
     status = await msg.reply(
         "⏳ <b>Processing your link...</b>\n"
         "<i>please wait ~20s</i>",
