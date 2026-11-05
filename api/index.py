@@ -1,9 +1,5 @@
-# api/index.py — Terabox -> Telegram bot (multi-source, Vercel serverless)
-# tier1: shakir unified proxy (GET + POST variants)
-# tier2: robin worker (legacy)
-# tier3: share/list via jsToken + yunData sign/timestamp  <-- dlink fix
-# tier4: ndus cookie path (folder-aware)
-# tier5: solver proxy (needs VPS)
+# api/index.py — Terabox -> Telegram bot (multi-source, bn/en i18n)
+# tier1 shakir proxy · tier2 robin · tier3 jsToken+sign · tier4 ndus cookie · tier5 solver
 
 import html
 import json
@@ -18,6 +14,7 @@ from aiogram import Bot, Dispatcher, F, Router
 from aiogram.enums import ParseMode
 from aiogram.filters import CommandStart, Command
 from aiogram.types import (
+    CallbackQuery,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
     Message,
@@ -31,10 +28,15 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 BOT_TOKEN      = "8426186448:AAEJCf9mGHyZydX1TaJRWLRzvn50SlUyQw8"
 WEBHOOK_SECRET = "tb_71x_smith_secret"
 
-TERABOX_COOKIE = ""          # optional ndus=...
-SOLVER_URL     = ""
-TB_BASE        = "https://teraboxdl.site"
-TS_SITEKEY     = "0x4AAAAAAFZJOCzA6dP3BIYH"
+# *** SET THIS to fix dlink N/A ***
+# browser -> terabox.com login -> devtools -> Application -> Cookies
+#   -> terabox.com -> ndus value
+# paste below as: TERABOX_COOKIE = "ndus=PASTE_HERE"
+TERABOX_COOKIE = ""
+
+SOLVER_URL = ""
+TB_BASE    = "https://teraboxdl.site"
+TS_SITEKEY = "0x4AAAAAAFZJOCzA6dP3BIYH"
 
 SHAKIR_API = "https://tbx-proxy.shakir-ansarii075.workers.dev/"
 ROBIN_API  = "https://terabox-worker.robinkumarshakya103.workers.dev/api"
@@ -45,6 +47,60 @@ UA = ("Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 "
 HTTP_TIMEOUT = 20
 COOLDOWN     = 3.0
 CHUNK        = 5
+
+# ================================================================
+# i18n
+# ================================================================
+LANG_STRINGS = {
+    "en": {
+        "welcome_body": (
+            "send a terabox share link.\n"
+            "i'll return <b>direct download</b> and <b>stream</b> buttons per file.\n\n"
+            "<b>/help</b>  ·  <b>/id</b>  ·  <b>/lang</b>"
+        ),
+        "extracting": "⚡ extracting…",
+        "failed_hint": "link may be expired, private, or terabox changed shape",
+        "slow_down": "⏳ slow down — {n}s",
+        "lang_set": "language set to <b>English</b>.",
+        "lang_pick": "choose language:",
+        "files_label": "file(s)",
+        "showing": "showing",
+        "no_dlink_hint": "no direct link — set TERABOX_COOKIE in bot config (see /help)",
+    },
+    "bn": {
+        "welcome_body": (
+            "terabox শেয়ার লিংক পাঠাও।\n"
+            "প্রতি ফাইলের জন্য <b>direct download</b> আর <b>stream</b> বাটন দেব।\n\n"
+            "<b>/help</b>  ·  <b>/id</b>  ·  <b>/lang</b>"
+        ),
+        "extracting": "⚡ বের করছি…",
+        "failed_hint": "লিংক expired হতে পারে, private, অথবা terabox structure বদলেছে",
+        "slow_down": "⏳ একটু দাঁড়াও — {n}s",
+        "lang_set": "ভাষা <b>বাংলা</b> সেট হয়েছে।",
+        "lang_pick": "ভাষা বেছে নাও:",
+        "files_label": "ফাইল",
+        "showing": "দেখাচ্ছি",
+        "no_dlink_hint": "direct link পাওয়া যায়নি — bot config এ TERABOX_COOKIE সেট করো (দেখো /help)",
+    },
+}
+
+USER_LANG: dict[int, str] = {}
+
+
+def lang_for(obj) -> str:
+    try:
+        uid = obj.from_user.id
+    except Exception:
+        return "en"
+    if uid in USER_LANG:
+        return USER_LANG[uid]
+    code = (getattr(obj.from_user, "language_code", None) or "en").lower()
+    return "bn" if code.startswith("bn") else "en"
+
+
+def t(lang: str, key: str, **kw) -> str:
+    s = LANG_STRINGS.get(lang, LANG_STRINGS["en"]).get(key, "")
+    return s.format(**kw) if kw else s
 
 # ================================================================
 TB_HOSTS = (
@@ -112,7 +168,6 @@ def parse_share_url(share_url: str) -> dict:
     m = re.search(r"[?&]pwd=([A-Za-z0-9]+)", share_url)
     if m:
         pwd = m.group(1)
-
     shorturl = ""
     m = re.search(r"/s/([A-Za-z0-9_-]+)", share_url)
     if m:
@@ -164,7 +219,7 @@ def _files_from_list(items) -> list[dict]:
     return out
 
 # ================================================================
-# tier 1 — shakir proxy (GET + POST variants)
+# tier 1 — shakir proxy (GET + POST)
 # ================================================================
 def fetch_via_shakir(share_url: str) -> list[dict]:
     parts = parse_share_url(share_url)
@@ -172,7 +227,7 @@ def fetch_via_shakir(share_url: str) -> list[dict]:
     if parts["shorturl"].startswith("1"):
         surls.append(parts["shorturl"][1:])
 
-    attempts: list[tuple[str, dict, Optional[dict]]] = []
+    attempts = []
     for surl in surls:
         base = {"mode": "resolve", "surl": surl, "raw": "1"}
         if parts["pwd"]:
@@ -186,8 +241,7 @@ def fetch_via_shakir(share_url: str) -> list[dict]:
         try:
             if method == "GET":
                 r = requests.get(SHAKIR_API, params=params,
-                                 headers={"User-Agent": UA},
-                                 timeout=HTTP_TIMEOUT)
+                                 headers={"User-Agent": UA}, timeout=HTTP_TIMEOUT)
             else:
                 r = requests.post(SHAKIR_API, json=body,
                                   headers={"User-Agent": UA,
@@ -214,7 +268,7 @@ def fetch_via_shakir(share_url: str) -> list[dict]:
     raise RuntimeError(f"shakir: {last_err or 'no files'}")
 
 # ================================================================
-# tier 2 — robin worker (legacy)
+# tier 2 — robin
 # ================================================================
 def fetch_via_robin(share_url: str) -> list[dict]:
     r = requests.get(ROBIN_API, params={"url": share_url},
@@ -240,7 +294,7 @@ def fetch_via_robin(share_url: str) -> list[dict]:
     return files
 
 # ================================================================
-# tier 3 — jsToken + yunData sign/timestamp  (dlink fix)
+# tier 3 — jsToken + yunData sign/timestamp
 # ================================================================
 _JS_TOKEN_RE  = re.compile(r"fn%28%22([^%]+?)%22%29")
 _JS_TOKEN_RE2 = re.compile(r"jsToken['\"]?\s*[:=]\s*['\"]([A-Za-z0-9_\-]+)")
@@ -249,8 +303,7 @@ _SIGN_RE      = re.compile(r'"(?:sign|SIGN)"\s*:\s*"([^"]+)"')
 _TS_RE        = re.compile(r'"(?:timestamp|TIMESTAMP)"\s*:\s*"?(\d+)"?')
 
 
-def _scrape_page(sess, surl: str) -> tuple[Optional[str], dict]:
-    """Load share page, return (jsToken, {sign, timestamp}) — either may be None."""
+def _scrape_page(sess, surl: str):
     candidates = [
         f"https://www.terabox.com/s/{surl}",
         f"https://www.terabox.com/sharing/link?surl={surl}",
@@ -265,19 +318,16 @@ def _scrape_page(sess, surl: str) -> tuple[Optional[str], dict]:
             continue
         if r.status_code != 200:
             continue
-
         text = r.text
         token = None
         m = _JS_TOKEN_RE.search(text) or _JS_TOKEN_RE2.search(text)
         if m:
             token = m.group(1)
-
-        yun: dict = {}
+        yun = {}
         ym = _YUNDATA_RE.search(text)
         if ym:
             try:
-                blob = ym.group(1)
-                data = json.loads(blob)
+                data = json.loads(ym.group(1))
                 if isinstance(data, dict):
                     if data.get("sign"):
                         yun["sign"] = data["sign"]
@@ -293,14 +343,12 @@ def _scrape_page(sess, surl: str) -> tuple[Optional[str], dict]:
             tm = _TS_RE.search(text)
             if tm:
                 yun["timestamp"] = tm.group(1)
-
         if token or yun:
             return token, yun
     return None, {}
 
 
-def _share_list_call(sess, surl: str, token: Optional[str], pwd: str,
-                     yun: dict, dir_path: str = "/") -> dict:
+def _share_list_call(sess, surl, token, pwd, yun, dir_path="/"):
     params = {
         "app_id": "250528", "web": "1", "channel": "chunlei",
         "clienttype": "0", "root": "1" if dir_path == "/" else "0",
@@ -316,7 +364,6 @@ def _share_list_call(sess, surl: str, token: Optional[str], pwd: str,
         params["sign"] = yun["sign"]
     if yun.get("timestamp"):
         params["timestamp"] = yun["timestamp"]
-
     r = sess.get("https://www.terabox.com/share/list",
                  params=params, timeout=HTTP_TIMEOUT,
                  headers={"Referer": f"https://www.terabox.com/s/{surl}",
@@ -329,15 +376,12 @@ def fetch_via_jstoken(share_url: str) -> list[dict]:
     parts = parse_share_url(share_url)
     sess = requests.Session()
     sess.headers.update({"User-Agent": UA, "Accept": "*/*"})
-
     token, yun = _scrape_page(sess, parts["shorturl"])
     if not token and not yun:
-        raise RuntimeError("share page scrape empty (jsToken and yunData both missing)")
-
+        raise RuntimeError("share page scrape empty")
     surls = [parts["shorturl"]]
     if parts["shorturl"].startswith("1"):
         surls.append(parts["shorturl"][1:])
-
     last_err = ""
     for surl in surls:
         try:
@@ -351,14 +395,13 @@ def fetch_via_jstoken(share_url: str) -> list[dict]:
         files = _files_from_list(j.get("list") or [])
         if files:
             return files
-        last_err = "empty list (dlink may be blocked for anonymous session)"
+        last_err = "empty list"
     raise RuntimeError(f"jsToken: {last_err or 'no files'}")
 
 # ================================================================
-# tier 4 — ndus cookie share/list
+# tier 4 — ndus cookie (dlink this is the one that works)
 # ================================================================
-def _cookie_list_dir(sess, shorturl: str, dir_path: str, pwd: str,
-                     yun: dict, depth: int = 0) -> list[dict]:
+def _cookie_list_dir(sess, shorturl, dir_path, pwd, yun, depth=0):
     if depth > 3:
         return []
     try:
@@ -367,15 +410,13 @@ def _cookie_list_dir(sess, shorturl: str, dir_path: str, pwd: str,
         raise RuntimeError(f"cookie list dir={dir_path}: {e}")
     if j.get("errno", 0) != 0:
         raise RuntimeError(f"cookie share/list errno {j.get('errno')}: {j.get('errmsg') or ''}")
-
-    out: list[dict] = []
+    out = []
     for item in j.get("list") or []:
         if not isinstance(item, dict):
             continue
         if item.get("isdir") == 1:
             out.extend(_cookie_list_dir(sess, shorturl,
-                                        item.get("path") or "/",
-                                        pwd, yun, depth + 1))
+                                        item.get("path") or "/", pwd, yun, depth + 1))
         else:
             parsed = _file_from_any(item)
             if parsed:
@@ -385,7 +426,7 @@ def _cookie_list_dir(sess, shorturl: str, dir_path: str, pwd: str,
 
 def fetch_via_cookie(share_url: str) -> list[dict]:
     if not TERABOX_COOKIE:
-        raise RuntimeError("TERABOX_COOKIE not set")
+        raise RuntimeError("TERABOX_COOKIE not set — dlink needs login session")
     parts = parse_share_url(share_url)
     sess = requests.Session()
     sess.headers.update({
@@ -397,13 +438,13 @@ def fetch_via_cookie(share_url: str) -> list[dict]:
     _, yun = _scrape_page(sess, parts["shorturl"])
     files = _cookie_list_dir(sess, parts["shorturl"], "/", parts["pwd"], yun, 0)
     if not files:
-        raise RuntimeError("cookie path returned empty list (cookie may be expired)")
+        raise RuntimeError("cookie path empty (cookie may be expired)")
     return files
 
 # ================================================================
 # tier 5 — solver proxy
 # ================================================================
-def _solve_turnstile(retries: int = 2) -> Optional[str]:
+def _solve_turnstile(retries=2):
     for i in range(retries):
         try:
             r = requests.post(
@@ -450,16 +491,22 @@ def fetch_via_proxy(share_url: str) -> list[dict]:
     return files
 
 # ================================================================
-# orchestrator
+# orchestrator — cookie tier FIRST when set (it's the only one that yields dlink)
 # ================================================================
-def fetch_share_meta(share_url: str) -> tuple[list[dict], str]:
-    errors: list[str] = []
-    for name, fn in (
+def fetch_share_meta(share_url: str):
+    errors = []
+    tiers = []
+    if TERABOX_COOKIE:
+        tiers.append(("cookie", fetch_via_cookie))
+    tiers.extend([
         ("shakir",  fetch_via_shakir),
         ("robin",   fetch_via_robin),
         ("jsToken", fetch_via_jstoken),
-        ("cookie",  fetch_via_cookie),
-    ):
+    ])
+    if not TERABOX_COOKIE:
+        tiers.append(("cookie", fetch_via_cookie))
+
+    for name, fn in tiers:
         try:
             files = fn(share_url)
             LOG.info("tier %s ok (%d files)", name, len(files))
@@ -478,13 +525,15 @@ def fetch_share_meta(share_url: str) -> tuple[list[dict], str]:
 # ================================================================
 # render
 # ================================================================
-def render_chunk(chunk, offset, total, source) -> tuple[str, InlineKeyboardMarkup]:
+def render_chunk(chunk, offset, total, source, lang) -> tuple[str, InlineKeyboardMarkup]:
+    label = t(lang, "files_label")
+    showing = t(lang, "showing")
     lines = [
         "╭───────────────────────╮",
         "   <b>T E R A B O X  ·  D L</b>",
         "╰───────────────────────╯",
         "",
-        f"📦 <b>{total}</b> file(s)  ·  showing <b>{offset + 1}–{offset + len(chunk)}</b>",
+        f"📦 <b>{total}</b> {label}  ·  {showing} <b>{offset + 1}–{offset + len(chunk)}</b>",
         "",
     ]
     kb = InlineKeyboardBuilder()
@@ -516,13 +565,12 @@ dp.include_router(router)
 
 @router.message(CommandStart())
 async def cmd_start(msg: Message):
+    lang = lang_for(msg)
     await msg.answer(
         "╭───────────────────────╮\n"
         "   <b>T E R A B O X  ·  B O T</b>\n"
         "╰───────────────────────╯\n\n"
-        "send a terabox share link.\n"
-        "i'll return <b>direct download</b> and <b>stream</b> buttons per file.\n\n"
-        "<b>/help</b>  ·  <b>/id</b>",
+        + t(lang, "welcome_body"),
         parse_mode=ParseMode.HTML,
     )
 
@@ -537,20 +585,45 @@ async def cmd_id(msg: Message):
     await msg.answer(f"<code>{msg.from_user.id}</code>", parse_mode=ParseMode.HTML)
 
 
+@router.message(Command("lang"))
+async def cmd_lang(msg: Message):
+    lang = lang_for(msg)
+    kb = InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text="🇬🇧 English", callback_data="lang:en"),
+        InlineKeyboardButton(text="🇧🇩 বাংলা",   callback_data="lang:bn"),
+    ]])
+    await msg.answer(t(lang, "lang_pick"), reply_markup=kb, parse_mode=ParseMode.HTML)
+
+
+@router.callback_query(F.data.startswith("lang:"))
+async def cb_lang(cb: CallbackQuery):
+    new = cb.data.split(":", 1)[1]
+    if new not in LANG_STRINGS:
+        await cb.answer()
+        return
+    USER_LANG[cb.from_user.id] = new
+    try:
+        await cb.message.edit_text(t(new, "lang_set"), parse_mode=ParseMode.HTML)
+    except Exception:
+        pass
+    await cb.answer()
+
+
 @router.message(F.text)
 async def on_text(msg: Message):
     url = find_terabox_url(msg.text or "")
     if not url:
         return
+    lang = lang_for(msg)
     uid = msg.from_user.id
     now = time.time()
     last = COOLDOWN_BY_UID.get(uid, 0)
     if now - last < COOLDOWN:
-        await msg.reply(f"⏳ slow down — {int(COOLDOWN - (now - last))}s")
+        await msg.reply(t(lang, "slow_down", n=int(COOLDOWN - (now - last))))
         return
     COOLDOWN_BY_UID[uid] = now
 
-    status = await msg.reply("<b>⚡ extracting…</b>", parse_mode=ParseMode.HTML)
+    status = await msg.reply(t(lang, "extracting"), parse_mode=ParseMode.HTML)
     try:
         files, tier = fetch_share_meta(url)
     except Exception as e:
@@ -560,7 +633,8 @@ async def on_text(msg: Message):
                 "╭───────────────────────╮\n"
                 "   <b>E X T R A C T   F A I L E D</b>\n"
                 "╰───────────────────────╯\n\n"
-                f"<code>{html.escape(str(e))[:700]}</code>",
+                f"<code>{html.escape(str(e))[:700]}</code>\n\n"
+                f"<i>{t(lang, 'failed_hint')}</i>",
                 parse_mode=ParseMode.HTML,
             )
         except Exception:
@@ -574,7 +648,7 @@ async def on_text(msg: Message):
 
     total = len(files)
     for start in range(0, total, CHUNK):
-        text, kb = render_chunk(files[start:start + CHUNK], start, total, url)
+        text, kb = render_chunk(files[start:start + CHUNK], start, total, url, lang)
         try:
             await msg.answer(text, parse_mode=ParseMode.HTML,
                              reply_markup=kb, disable_web_page_preview=True)
@@ -583,7 +657,7 @@ async def on_text(msg: Message):
             break
 
 # ================================================================
-# fastapi entrypoint
+# fastapi
 # ================================================================
 app = FastAPI()
 
@@ -600,31 +674,28 @@ async def root():
 async def test_extract(url: str):
     try:
         files, tier = fetch_share_meta(url)
-        return {"ok": True, "tier": tier, "count": len(files), "files": files}
+        return {"ok": True, "tier": tier, "count": len(files), "files": files,
+                "cookie_set": bool(TERABOX_COOKIE)}
     except Exception as e:
-        return {"ok": False, "error": str(e)}
+        return {"ok": False, "error": str(e), "cookie_set": bool(TERABOX_COOKIE)}
 
 
 @app.get("/api/debug")
 async def debug_extract(url: str):
-    """Raw share/list response + scraped tokens. Use this when dlink is N/A."""
     try:
         parts = parse_share_url(url)
         sess = requests.Session()
         sess.headers.update({"User-Agent": UA, "Accept": "*/*"})
         token, yun = _scrape_page(sess, parts["shorturl"])
-        cookies = sess.cookies.get_dict()
         raw = _share_list_call(sess, parts["shorturl"], token, parts["pwd"], yun)
         return {
             "ok": True,
-            "shorturl": parts["shorturl"],
-            "pwd": parts["pwd"],
             "jsToken_found": bool(token),
             "yun": yun,
-            "cookies_set": list(cookies.keys()),
+            "cookies_set": list(sess.cookies.get_dict().keys()),
             "raw_errno": raw.get("errno"),
-            "raw_errmsg": raw.get("errmsg"),
             "raw_list": raw.get("list"),
+            "cookie_configured": bool(TERABOX_COOKIE),
         }
     except Exception as e:
         return {"ok": False, "error": str(e)}
