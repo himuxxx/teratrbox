@@ -1,13 +1,17 @@
 # api/index.py — Terabox -> Telegram bot (multi-source, Vercel serverless)
-# tier1: terabox-worker.robinkumarshakya103.workers.dev (free public worker)
-# tier2: terabox.com/share/list with optional ndus cookie
-# tier3: solver proxy (teraboxdl.site) if SOLVER_URL set
+# tier1: tbx-proxy.shakir-ansarii075.workers.dev  (mode=resolve, jsToken auto)
+# tier2: terabox-worker.robinkumarshakya103.workers.dev (legacy)
+# tier3: direct share/list via jsToken scraped from share page (no login cookie)
+# tier4: direct share/list via ndus cookie (if TERABOX_COOKIE set)
+# tier5: solver proxy (teraboxdl.site) if SOLVER_URL set
 
 import html
+import json
 import logging
 import re
 import time
 from typing import Optional
+from urllib.parse import parse_qs, urlparse
 
 import requests
 from fastapi import FastAPI, Request, Response
@@ -37,12 +41,14 @@ SOLVER_URL = ""
 TB_BASE    = "https://teraboxdl.site"
 TS_SITEKEY = "0x4AAAAAAFZJOCzA6dP3BIYH"
 
-HNN_API = "https://terabox-worker.robinkumarshakya103.workers.dev/api"
+# Public workers (in fallback order)
+SHAKIR_API = "https://tbx-proxy.shakir-ansarii075.workers.dev/"
+ROBIN_API  = "https://terabox-worker.robinkumarshakya103.workers.dev/api"
 
 UA = ("Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/137.0.0.0 Mobile Safari/537.36")
 
-HTTP_TIMEOUT = 25
+HTTP_TIMEOUT = 20
 COOLDOWN     = 3.0
 CHUNK        = 5
 
@@ -52,6 +58,7 @@ TB_HOSTS = (
     "1024terabox.com", "4funbox.com", "mirrobox.com", "nephobox.com",
     "freeterabox.com", "1024tera.com", "momerybox.com", "tibibox.com",
     "terabox.fun", "4funbox.co", "terasharelink.com", "gibibox.com",
+    "teraboxshare.com", "teraboxlink.com", "terasharefile.com",
 )
 URL_RE = re.compile(r"https?://[^\s<>\"']+", re.IGNORECASE)
 
@@ -145,47 +152,164 @@ def _file_from_any(f: dict) -> Optional[dict]:
     direct = _pick(f, "dlink", "downloadLink", "download_link",
                    "download_url", "download", default="N/A")
     stream = _pick(f, "stream_url", "streaming_link", "play_url",
-                   "streamUrl", "streaming_url", default="N/A")
+                   "streamUrl", "streaming_url", "vip_stream_url", default="N/A")
     return {"name": str(name), "size": str(size),
             "direct": str(direct), "stream": str(stream)}
 
-# ================================================================
-# tier 1 — public free worker
-# ================================================================
-def fetch_via_worker(share_url: str) -> list[dict]:
-    r = requests.get(
-        HNN_API,
-        params={"url": share_url},
-        timeout=HTTP_TIMEOUT,
-        headers={"User-Agent": UA},
-    )
-    r.raise_for_status()
-    j = r.json()
 
-    if not j.get("success"):
-        raise RuntimeError(j.get("error") or "worker returned success=false")
-
-    files_raw = j.get("files") or []
-    out: list[dict] = []
-    for f in files_raw:
-        if not isinstance(f, dict):
-            continue
-        name = f.get("file_name") or f.get("filename") or "unknown"
-        size = f.get("size") or human_size(f.get("file_size"))
-        direct = (f.get("download_url") or f.get("original_download_url")
-                  or f.get("download_link") or "N/A")
-        stream = f.get("streaming_url") or f.get("play_url") or "N/A"
-        out.append({"name": str(name), "size": str(size),
-                    "direct": str(direct), "stream": str(stream)})
-
-    if not out:
-        raise RuntimeError("worker returned empty file list")
+def _files_from_list(items) -> list[dict]:
+    out = []
+    if isinstance(items, dict):
+        items = items.get("list") or []
+    for it in items or []:
+        parsed = _file_from_any(it)
+        if parsed:
+            out.append(parsed)
     return out
 
 # ================================================================
-# tier 2 — cookie direct (terabox.com/share/list, recursive)
+# tier 1 — shakir unified proxy (mode=resolve, jsToken auto)
 # ================================================================
-def _list_dir(sess, shorturl: str, dir_path: str, pwd: str, depth: int = 0) -> list[dict]:
+def fetch_via_shakir(share_url: str) -> list[dict]:
+    parts = parse_share_url(share_url)
+    surls = [parts["shorturl"]]
+    if parts["shorturl"].startswith("1"):
+        surls.append(parts["shorturl"][1:])
+
+    last_err = ""
+    for surl in surls:
+        params = {"mode": "resolve", "surl": surl, "raw": "1"}
+        if parts["pwd"]:
+            params["pwd"] = parts["pwd"]
+        try:
+            r = requests.get(SHAKIR_API, params=params,
+                             headers={"User-Agent": UA},
+                             timeout=HTTP_TIMEOUT)
+        except Exception as e:
+            last_err = f"request: {e}"
+            continue
+        if r.status_code != 200:
+            last_err = f"HTTP {r.status_code}: {r.text[:120]}"
+            continue
+        try:
+            j = r.json()
+        except Exception:
+            last_err = "non-json response"
+            continue
+        if j.get("errno", 0) not in (0, None):
+            last_err = f"errno {j.get('errno')}: {j.get('errmsg') or ''}"
+            continue
+        files = _files_from_list(j.get("list") or j.get("files") or [])
+        if files:
+            return files
+        last_err = "empty list"
+    raise RuntimeError(f"shakir: {last_err or 'no files'}")
+
+# ================================================================
+# tier 2 — robin worker (legacy)
+# ================================================================
+def fetch_via_robin(share_url: str) -> list[dict]:
+    r = requests.get(ROBIN_API, params={"url": share_url},
+                     headers={"User-Agent": UA}, timeout=HTTP_TIMEOUT)
+    if r.status_code != 200:
+        raise RuntimeError(f"robin HTTP {r.status_code}: {r.text[:120]}")
+    j = r.json()
+    if not j.get("success"):
+        raise RuntimeError(j.get("error") or "robin success=false")
+    files = []
+    for f in j.get("files") or []:
+        if not isinstance(f, dict):
+            continue
+        files.append({
+            "name": str(f.get("file_name") or f.get("filename") or "unknown"),
+            "size": str(f.get("size") or human_size(f.get("file_size"))),
+            "direct": str(f.get("download_url") or f.get("original_download_url")
+                          or f.get("download_link") or "N/A"),
+            "stream": str(f.get("streaming_url") or f.get("play_url") or "N/A"),
+        })
+    if not files:
+        raise RuntimeError("robin returned empty list")
+    return files
+
+# ================================================================
+# tier 3 — direct share/list via jsToken (no login cookie)
+# ================================================================
+_JS_TOKEN_RE = re.compile(r"fn%28%22([^%]+?)%22%29")
+_JS_TOKEN_RE2 = re.compile(r"jsToken['\"]?\s*[:=]\s*['\"]([A-Za-z0-9_\-]+)")
+
+
+def _scrape_js_token(sess, surl: str) -> Optional[str]:
+    candidates = [
+        f"https://www.terabox.com/s/{surl}",
+        f"https://www.terabox.com/sharing/link?surl={surl}",
+        f"https://www.1024tera.com/s/{surl}",
+    ]
+    for page_url in candidates:
+        try:
+            r = sess.get(page_url, timeout=HTTP_TIMEOUT,
+                         headers={"User-Agent": UA,
+                                  "Accept": "text/html,application/xhtml+xml"})
+        except Exception:
+            continue
+        if r.status_code != 200:
+            continue
+        m = _JS_TOKEN_RE.search(r.text) or _JS_TOKEN_RE2.search(r.text)
+        if m:
+            return m.group(1)
+    return None
+
+
+def fetch_via_jstoken(share_url: str) -> list[dict]:
+    parts = parse_share_url(share_url)
+    sess = requests.Session()
+    sess.headers.update({"User-Agent": UA, "Accept": "*/*"})
+
+    token = _scrape_js_token(sess, parts["shorturl"])
+    if not token:
+        raise RuntimeError("jsToken not found in share page (link may need verify)")
+
+    surls = [parts["shorturl"]]
+    if parts["shorturl"].startswith("1"):
+        surls.append(parts["shorturl"][1:])
+
+    last_err = ""
+    for surl in surls:
+        params = {
+            "app_id": "250528", "web": "1", "channel": "dubox",
+            "clienttype": "0", "jsToken": token,
+            "shorturl": surl, "root": "1",
+        }
+        if parts["pwd"]:
+            params["pwd"] = parts["pwd"]
+        try:
+            r = sess.get("https://www.terabox.com/share/list",
+                         params=params, timeout=HTTP_TIMEOUT,
+                         headers={"Referer": f"https://www.terabox.com/s/{surl}",
+                                  "Accept": "application/json, text/plain, */*"})
+        except Exception as e:
+            last_err = f"request: {e}"
+            continue
+        if r.status_code != 200:
+            last_err = f"HTTP {r.status_code}"
+            continue
+        try:
+            j = r.json()
+        except Exception:
+            last_err = "non-json"
+            continue
+        if j.get("errno", 0) != 0:
+            last_err = f"errno {j.get('errno')}: {j.get('errmsg') or ''}"
+            continue
+        files = _files_from_list(j.get("list") or [])
+        if files:
+            return files
+        last_err = "empty list"
+    raise RuntimeError(f"jsToken: {last_err or 'no files'}")
+
+# ================================================================
+# tier 4 — ndus cookie share/list (recursive, folder-aware)
+# ================================================================
+def _cookie_list_dir(sess, shorturl: str, dir_path: str, pwd: str, depth: int = 0) -> list[dict]:
     if depth > 3:
         return []
     r = sess.get(
@@ -198,14 +322,15 @@ def _list_dir(sess, shorturl: str, dir_path: str, pwd: str, depth: int = 0) -> l
     r.raise_for_status()
     j = r.json()
     if j.get("errno", 0) != 0:
-        raise RuntimeError(f"share/list errno {j.get('errno')}: {j.get('errmsg') or ''}")
+        raise RuntimeError(f"cookie share/list errno {j.get('errno')}: {j.get('errmsg') or ''}")
 
     out: list[dict] = []
     for item in j.get("list") or []:
         if not isinstance(item, dict):
             continue
         if item.get("isdir") == 1:
-            out.extend(_list_dir(sess, shorturl, item.get("path") or "/", pwd, depth + 1))
+            out.extend(_cookie_list_dir(sess, shorturl,
+                                        item.get("path") or "/", pwd, depth + 1))
         else:
             parsed = _file_from_any(item)
             if parsed:
@@ -224,13 +349,13 @@ def fetch_via_cookie(share_url: str) -> list[dict]:
         "Referer": f"https://www.terabox.com/sharing/link?surl={parts['shorturl']}",
         "Accept": "application/json, text/plain, */*",
     })
-    files = _list_dir(sess, parts["shorturl"], "/", parts["pwd"], 0)
+    files = _cookie_list_dir(sess, parts["shorturl"], "/", parts["pwd"], 0)
     if not files:
         raise RuntimeError("cookie path returned empty list (cookie may be expired)")
     return files
 
 # ================================================================
-# tier 3 — solver proxy
+# tier 5 — solver proxy
 # ================================================================
 def _solve_turnstile(retries: int = 2) -> Optional[str]:
     for i in range(retries):
@@ -273,7 +398,7 @@ def fetch_via_proxy(share_url: str) -> list[dict]:
     j = r.json()
     if j.get("errno", 0) != 0:
         raise RuntimeError(j.get("errmsg") or f"proxy errno {j.get('errno')}")
-    files = [x for x in (_file_from_any(it) for it in (j.get("list") or [])) if x]
+    files = _files_from_list(j.get("list") or [])
     if not files:
         raise RuntimeError("proxy returned empty list")
     return files
@@ -281,26 +406,30 @@ def fetch_via_proxy(share_url: str) -> list[dict]:
 # ================================================================
 # orchestrator
 # ================================================================
-def fetch_share_meta(share_url: str) -> list[dict]:
+def fetch_share_meta(share_url: str) -> tuple[list[dict], str]:
+    """Returns (files, source_tier). Raises RuntimeError with per-tier errors."""
     errors: list[str] = []
 
-    try:
-        return fetch_via_worker(share_url)
-    except Exception as e:
-        LOG.warning("worker failed: %s", e)
-        errors.append(f"worker: {e}")
-
-    try:
-        return fetch_via_cookie(share_url)
-    except Exception as e:
-        LOG.warning("cookie path failed: %s", e)
-        errors.append(f"cookie: {e}")
+    for name, fn in (
+        ("shakir",  fetch_via_shakir),
+        ("robin",   fetch_via_robin),
+        ("jsToken", fetch_via_jstoken),
+        ("cookie",  fetch_via_cookie),
+    ):
+        try:
+            files = fn(share_url)
+            LOG.info("tier %s ok (%d files)", name, len(files))
+            return files, name
+        except Exception as e:
+            LOG.warning("tier %s failed: %s", name, e)
+            errors.append(f"{name}: {e}")
 
     if SOLVER_URL:
         try:
-            return fetch_via_proxy(share_url)
+            files = fetch_via_proxy(share_url)
+            return files, "proxy"
         except Exception as e:
-            LOG.warning("proxy failed: %s", e)
+            LOG.warning("tier proxy failed: %s", e)
             errors.append(f"proxy: {e}")
 
     raise RuntimeError(" | ".join(errors))
@@ -384,7 +513,7 @@ async def on_text(msg: Message):
     status = await msg.reply("<b>⚡ extracting…</b>", parse_mode=ParseMode.HTML)
 
     try:
-        files = fetch_share_meta(url)
+        files, tier = fetch_share_meta(url)
     except Exception as e:
         LOG.exception("fetch failed")
         try:
@@ -392,7 +521,7 @@ async def on_text(msg: Message):
                 "╭───────────────────────╮\n"
                 "   <b>E X T R A C T   F A I L E D</b>\n"
                 "╰───────────────────────╯\n\n"
-                f"<code>{html.escape(str(e))[:600]}</code>",
+                f"<code>{html.escape(str(e))[:700]}</code>",
                 parse_mode=ParseMode.HTML,
             )
         except Exception:
@@ -430,8 +559,8 @@ async def root():
 async def test_extract(url: str):
     """Browser-test: /api/test?url=<terabox share url>. Returns raw JSON."""
     try:
-        files = fetch_share_meta(url)
-        return {"ok": True, "count": len(files), "files": files}
+        files, tier = fetch_share_meta(url)
+        return {"ok": True, "tier": tier, "count": len(files), "files": files}
     except Exception as e:
         return {"ok": False, "error": str(e)}
 
