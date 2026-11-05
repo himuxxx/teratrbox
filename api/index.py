@@ -1,4 +1,6 @@
-# api/index.py — Terabox -> Telegram bot (solver path + real error reporting)
+# api/index.py — Terabox -> Telegram bot (original external solver)
+# flow: solver /solve -> teraboxdl.site /api/verify -> /api/proxy
+
 import html
 import logging
 import re
@@ -26,7 +28,7 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 BOT_TOKEN      = "8426186448:AAE2TXh2TfgEWK2CDN96DfVuDmYfNLe-IkA"
 WEBHOOK_SECRET = "tb_71x_smith_secret"
 
-SOLVER_URL = "https://turnstilefuckre.onrender.com"
+SOLVER_URL = "http://85.115.209.225:8191"
 TB_BASE    = "https://teraboxdl.site"
 TS_SITEKEY = "0x4AAAAAAFZJOCzA6dP3BIYH"
 
@@ -92,7 +94,7 @@ def _clip(s: str, n: int = 42) -> str:
     return s if len(s) <= n else s[: n - 3] + "…"
 
 # ================================================================
-# solver flow (with real error reporting)
+# solver flow
 # ================================================================
 def _solve_turnstile(retries: int = 3) -> Optional[str]:
     last_err = "unknown error"
