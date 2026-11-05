@@ -23,7 +23,7 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 # ================================================================
 # CONFIG
 # ================================================================
-BOT_TOKEN      = "8426186448:AAEJCf9mGHyZydX1TaJRWLRzvn50SlUyQw8"
+BOT_TOKEN      = "8426186448:AAE2TXh2TfgEWK2CDN96DfVuDmYfNLe-IkA"
 WEBHOOK_SECRET = "tb_71x_smith_secret"
 
 SOLVER_URL = "https://turnstilefuckre.onrender.com"
