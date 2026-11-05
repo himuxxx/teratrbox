@@ -1,6 +1,4 @@
-# api/index.py — Terabox -> Telegram bot (clean UI + Copy Buttons)
-# flow: solver /solve -> teraboxdl.site /api/verify -> /api/proxy
-
+# api/index.py — Terabox -> Telegram bot (solver path + real error reporting)
 import html
 import logging
 import re
@@ -57,7 +55,7 @@ if not LOG.handlers:
     LOG.addHandler(_h)
 
 COOLDOWN_BY_UID: dict[int, float] = {}
-COPY_CACHE: dict[str, str] = {} # token -> link
+COPY_CACHE: dict[str, str] = {}
 
 # ================================================================
 # helpers
@@ -94,11 +92,11 @@ def _clip(s: str, n: int = 42) -> str:
     return s if len(s) <= n else s[: n - 3] + "…"
 
 # ================================================================
-# solver flow
+# solver flow (with real error reporting)
 # ================================================================
 def _solve_turnstile(retries: int = 3) -> Optional[str]:
+    last_err = "unknown error"
     for i in range(retries):
-        t0 = time.time()
         try:
             r = requests.post(
                 SOLVER_URL.rstrip("/") + "/solve",
@@ -106,16 +104,20 @@ def _solve_turnstile(retries: int = 3) -> Optional[str]:
                 timeout=SOLVER_TIMEOUT,
             )
             if r.status_code != 200:
-                LOG.warning("solver HTTP %d", r.status_code)
+                last_err = f"HTTP {r.status_code}: {r.text[:200]}"
+                LOG.warning(last_err)
                 continue
             tok = r.json().get("token")
             if tok:
-                LOG.info("solver ok in %.1fs", time.time() - t0)
                 return tok
+            else:
+                last_err = f"json no token: {r.text[:200]}"
         except Exception as e:
-            LOG.warning("solver attempt %d: %s", i + 1, e)
+            last_err = str(e)
+            LOG.warning(f"solver attempt {i + 1}: {e}")
         time.sleep(1)
-    return None
+    
+    raise RuntimeError(f"Solver failed after {retries} tries: {last_err}")
 
 
 def fetch_share_meta(share_url: str) -> list[dict]:
@@ -127,8 +129,6 @@ def fetch_share_meta(share_url: str) -> list[dict]:
         raise RuntimeError(f"base HTTP {r.status_code}")
 
     token = _solve_turnstile()
-    if not token:
-        raise RuntimeError("solver returned no token (is the remote solver up?)")
 
     s.post(
         TB_BASE + "/api/verify",
@@ -177,7 +177,7 @@ def fetch_share_meta(share_url: str) -> list[dict]:
     return files
 
 # ================================================================
-# render — clean centered layout + copy buttons
+# render
 # ================================================================
 def render_chunk(chunk, offset, total) -> tuple[str, InlineKeyboardMarkup]:
     pages = max(1, (total + CHUNK - 1) // CHUNK)
@@ -207,7 +207,6 @@ def render_chunk(chunk, offset, total) -> tuple[str, InlineKeyboardMarkup]:
         lines.append(f"💾 <b>{html.escape(size)}</b>  ·  {chip_line}")
         lines.append("")
 
-        # Row 1: URL Action Buttons
         row1 = []
         if dl and dl != "N/A":
             row1.append(InlineKeyboardButton(text="📥 Download Now", url=dl))
@@ -216,7 +215,6 @@ def render_chunk(chunk, offset, total) -> tuple[str, InlineKeyboardMarkup]:
         if row1:
             kb.row(*row1)
 
-        # Row 2: Copy Buttons (using callback to bypass 256 char limit)
         row2 = []
         if dl and dl != "N/A":
             tok = secrets.token_hex(6)
@@ -229,7 +227,6 @@ def render_chunk(chunk, offset, total) -> tuple[str, InlineKeyboardMarkup]:
         if row2:
             kb.row(*row2)
 
-        # simple cache eviction
         if len(COPY_CACHE) > 1000:
             for k in list(COPY_CACHE.keys())[:200]:
                 COPY_CACHE.pop(k, None)
@@ -351,8 +348,7 @@ app = FastAPI()
 async def root():
     return {"service": "terabox-bot", "status": "ok",
             "webhook": "/api/webhook",
-            "test": "/api/test?url=...",
-            "solver": SOLVER_URL}
+            "test": "/api/test?url=..."}
 
 
 @app.get("/api/test")
