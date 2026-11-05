@@ -1,9 +1,10 @@
-# api/index.py — Terabox -> Telegram bot (clean UI)
+# api/index.py — Terabox -> Telegram bot (clean UI + Copy Buttons)
 # flow: solver /solve -> teraboxdl.site /api/verify -> /api/proxy
 
 import html
 import logging
 import re
+import secrets
 import time
 from typing import Optional
 
@@ -13,6 +14,7 @@ from aiogram import Bot, Dispatcher, F, Router
 from aiogram.enums import ParseMode
 from aiogram.filters import CommandStart, Command
 from aiogram.types import (
+    CallbackQuery,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
     Message,
@@ -55,6 +57,7 @@ if not LOG.handlers:
     LOG.addHandler(_h)
 
 COOLDOWN_BY_UID: dict[int, float] = {}
+COPY_CACHE: dict[str, str] = {} # token -> link
 
 # ================================================================
 # helpers
@@ -86,7 +89,7 @@ def file_icon(name: str) -> str:
     return "📦"
 
 
-def _clip(s: str, n: int = 38) -> str:
+def _clip(s: str, n: int = 42) -> str:
     s = s or ""
     return s if len(s) <= n else s[: n - 3] + "…"
 
@@ -174,7 +177,7 @@ def fetch_share_meta(share_url: str) -> list[dict]:
     return files
 
 # ================================================================
-# render — clean centered layout
+# render — clean centered layout + copy buttons
 # ================================================================
 def render_chunk(chunk, offset, total) -> tuple[str, InlineKeyboardMarkup]:
     pages = max(1, (total + CHUNK - 1) // CHUNK)
@@ -200,20 +203,36 @@ def render_chunk(chunk, offset, total) -> tuple[str, InlineKeyboardMarkup]:
             chips.append("🔴 <b>STR</b>")
         chip_line = "  ·  ".join(chips) if chips else "<i>no links</i>"
 
-        # No box characters, no #01, use <code> to prevent auto-linking
         lines.append(f"{file_icon(name)} <code>{html.escape(_clip(name, 42))}</code>")
         lines.append(f"💾 <b>{html.escape(size)}</b>  ·  {chip_line}")
         lines.append("")
 
-        row = []
+        # Row 1: URL Action Buttons
+        row1 = []
         if dl and dl != "N/A":
-            row.append(InlineKeyboardButton(
-                text="📥 Download Now", url=dl))
+            row1.append(InlineKeyboardButton(text="📥 Download Now", url=dl))
         if st and st != "N/A":
-            row.append(InlineKeyboardButton(
-                text="🎬 Stream Now", url=st))
-        if row:
-            kb.row(*row)
+            row1.append(InlineKeyboardButton(text="🎬 Stream Now", url=st))
+        if row1:
+            kb.row(*row1)
+
+        # Row 2: Copy Buttons (using callback to bypass 256 char limit)
+        row2 = []
+        if dl and dl != "N/A":
+            tok = secrets.token_hex(6)
+            COPY_CACHE[tok] = dl
+            row2.append(InlineKeyboardButton(text="📋 Copy DL Link", callback_data=f"copy:{tok}"))
+        if st and st != "N/A":
+            tok = secrets.token_hex(6)
+            COPY_CACHE[tok] = st
+            row2.append(InlineKeyboardButton(text="📋 Copy Stream Link", callback_data=f"copy:{tok}"))
+        if row2:
+            kb.row(*row2)
+
+        # simple cache eviction
+        if len(COPY_CACHE) > 1000:
+            for k in list(COPY_CACHE.keys())[:200]:
+                COPY_CACHE.pop(k, None)
 
     lines.append("➖➖➖➖➖➖➖➖➖➖➖➖➖➖")
     lines.append(
@@ -254,6 +273,22 @@ async def cmd_help(msg: Message):
 @router.message(Command("id"))
 async def cmd_id(msg: Message):
     await msg.answer(f"<code>{msg.from_user.id}</code>", parse_mode=ParseMode.HTML)
+
+
+@router.callback_query(F.data.startswith("copy:"))
+async def cb_copy(cb: CallbackQuery):
+    tok = cb.data.split(":", 1)[1]
+    link = COPY_CACHE.get(tok)
+    if not link:
+        await cb.answer("Link expired, please re-extract the URL.", show_alert=True)
+        return
+    
+    await cb.message.answer(
+        f"<code>{html.escape(link)}</code>\n\n"
+        "<i>👆 tap the text above to copy</i>",
+        parse_mode=ParseMode.HTML,
+    )
+    await cb.answer("Sent!")
 
 
 @router.message(F.text)
