@@ -1,4 +1,4 @@
-# api/index.py — Terabox -> Telegram bot (solver-only path, clean UI)
+# api/index.py — Terabox -> Telegram bot (clean UI)
 # flow: solver /solve -> teraboxdl.site /api/verify -> /api/proxy
 
 import html
@@ -188,7 +188,6 @@ def render_chunk(chunk, offset, total) -> tuple[str, InlineKeyboardMarkup]:
     kb = InlineKeyboardBuilder()
 
     for i, f in enumerate(chunk):
-        idx = offset + i + 1
         name = f.get("name") or "unknown"
         size = f.get("size") or "?"
         dl = f.get("direct") or ""
@@ -201,10 +200,9 @@ def render_chunk(chunk, offset, total) -> tuple[str, InlineKeyboardMarkup]:
             chips.append("🔴 <b>STR</b>")
         chip_line = "  ·  ".join(chips) if chips else "<i>no links</i>"
 
-        lines.append(f"┌─ <b>#{idx:02d}</b>  {file_icon(name)}")
-        lines.append(f"│  <code>{html.escape(_clip(name))}</code>")
-        lines.append(f"│  💾 <b>{html.escape(size)}</b>  ·  {chip_line}")
-        lines.append(f"└{'─' * 20}")
+        # No box characters, no #01, use <code> to prevent auto-linking
+        lines.append(f"{file_icon(name)} <code>{html.escape(_clip(name, 42))}</code>")
+        lines.append(f"💾 <b>{html.escape(size)}</b>  ·  {chip_line}")
         lines.append("")
 
         row = []
@@ -217,12 +215,12 @@ def render_chunk(chunk, offset, total) -> tuple[str, InlineKeyboardMarkup]:
         if row:
             kb.row(*row)
 
-    lines.append("┈" * 24)
+    lines.append("➖➖➖➖➖➖➖➖➖➖➖➖➖➖")
     lines.append(
         f"📦 <b>{total}</b> file{'s' if total != 1 else ''}"
         f"   ·   📄 page <b>{page}</b>/<b>{pages}</b>"
     )
-    lines.append("┈" * 24)
+    lines.append("➖➖➖➖➖➖➖➖➖➖➖➖➖➖")
 
     return "\n".join(lines), kb.as_markup()
 
