@@ -263,7 +263,6 @@ async def cmd_start(msg: Message):
     ])
 
     await msg.answer(
-        "🌟 <b>W E L C O M E   T O</b> 🌟\n"
         "        🔥 <b>T E R A B O X - B O T</b> 🔥\n\n"
         "<blockquote><b>STATUS:</b> 🟢 System Online\n"
         "<b>MODE:</b> ⚡ Turbo Extraction\n"
