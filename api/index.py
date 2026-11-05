@@ -28,7 +28,7 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 BOT_TOKEN      = "8426186448:AAEJCf9mGHyZydX1TaJRWLRzvn50SlUyQw8"
 WEBHOOK_SECRET = "tb_71x_smith_secret"
 
-SOLVER_URL = "http://85.115.209.225:8191"
+SOLVER_URL = "https://turnstilefuckre.onrender.com"
 TB_BASE    = "https://teraboxdl.site"
 TS_SITEKEY = "0x4AAAAAAFZJOCzA6dP3BIYH"
 
