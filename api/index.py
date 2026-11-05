@@ -6,12 +6,10 @@
 # tier5: solver proxy (teraboxdl.site) if SOLVER_URL set
 
 import html
-import json
 import logging
 import re
 import time
 from typing import Optional
-from urllib.parse import parse_qs, urlparse
 
 import requests
 from fastapi import FastAPI, Request, Response
@@ -33,7 +31,6 @@ BOT_TOKEN      = "8426186448:AAEJCf9mGHyZydX1TaJRWLRzvn50SlUyQw8"
 WEBHOOK_SECRET = "tb_71x_smith_secret"
 
 # Optional — paste "ndus=..." from terabox.com login cookie
-# browser -> devtools -> Application -> Cookies -> terabox.com -> ndus
 TERABOX_COOKIE = ""
 
 # Optional — remote solver (needs VPS, not Vercel)
@@ -41,7 +38,6 @@ SOLVER_URL = ""
 TB_BASE    = "https://teraboxdl.site"
 TS_SITEKEY = "0x4AAAAAAFZJOCzA6dP3BIYH"
 
-# Public workers (in fallback order)
 SHAKIR_API = "https://tbx-proxy.shakir-ansarii075.workers.dev/"
 ROBIN_API  = "https://terabox-worker.robinkumarshakya103.workers.dev/api"
 
@@ -153,6 +149,9 @@ def _file_from_any(f: dict) -> Optional[dict]:
                    "download_url", "download", default="N/A")
     stream = _pick(f, "stream_url", "streaming_link", "play_url",
                    "streamUrl", "streaming_url", "vip_stream_url", default="N/A")
+    # terabox dlink is directly playable in <video> — reuse for stream when no dedicated stream
+    if (not stream or stream == "N/A") and direct and direct != "N/A":
+        stream = direct
     return {"name": str(name), "size": str(size),
             "direct": str(direct), "stream": str(stream)}
 
@@ -232,7 +231,7 @@ def fetch_via_robin(share_url: str) -> list[dict]:
     return files
 
 # ================================================================
-# tier 3 — direct share/list via jsToken (no login cookie)
+# tier 3 — direct share/list via jsToken (no login cookie), dlink=1
 # ================================================================
 _JS_TOKEN_RE = re.compile(r"fn%28%22([^%]+?)%22%29")
 _JS_TOKEN_RE2 = re.compile(r"jsToken['\"]?\s*[:=]\s*['\"]([A-Za-z0-9_\-]+)")
@@ -275,9 +274,10 @@ def fetch_via_jstoken(share_url: str) -> list[dict]:
     last_err = ""
     for surl in surls:
         params = {
-            "app_id": "250528", "web": "1", "channel": "dubox",
+            "app_id": "250528", "web": "1", "channel": "chunlei",
             "clienttype": "0", "jsToken": token,
             "shorturl": surl, "root": "1",
+            "dlink": "1",
         }
         if parts["pwd"]:
             params["pwd"] = parts["pwd"]
@@ -307,16 +307,17 @@ def fetch_via_jstoken(share_url: str) -> list[dict]:
     raise RuntimeError(f"jsToken: {last_err or 'no files'}")
 
 # ================================================================
-# tier 4 — ndus cookie share/list (recursive, folder-aware)
+# tier 4 — ndus cookie share/list (recursive, folder-aware), dlink=1
 # ================================================================
 def _cookie_list_dir(sess, shorturl: str, dir_path: str, pwd: str, depth: int = 0) -> list[dict]:
     if depth > 3:
         return []
     r = sess.get(
         "https://www.terabox.com/share/list",
-        params={"app_id": "250528", "web": "1", "channel": "dubox",
+        params={"app_id": "250528", "web": "1", "channel": "chunlei",
                 "clienttype": "0", "root": "1" if dir_path == "/" else "0",
-                "shorturl": shorturl, "dir": dir_path, "pwd": pwd},
+                "shorturl": shorturl, "dir": dir_path, "pwd": pwd,
+                "dlink": "1"},
         timeout=HTTP_TIMEOUT,
     )
     r.raise_for_status()
