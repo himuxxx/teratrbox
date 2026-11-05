@@ -1,4 +1,4 @@
-# api/index.py — Terabox -> Telegram bot (solver-only path, fancy UI)
+# api/index.py — Terabox -> Telegram bot (solver-only path, polished UI)
 # flow: solver /solve -> teraboxdl.site /api/verify -> /api/proxy
 
 import html
@@ -90,10 +90,6 @@ def _clip(s: str, n: int = 38) -> str:
     s = s or ""
     return s if len(s) <= n else s[: n - 3] + "…"
 
-
-def _div(width: int = 22, char: str = "┈") -> str:
-    return char * width
-
 # ================================================================
 # solver flow
 # ================================================================
@@ -178,16 +174,16 @@ def fetch_share_meta(share_url: str) -> list[dict]:
     return files
 
 # ================================================================
-# render — fancy cards
+# render — polished cards
 # ================================================================
-def render_chunk(chunk, offset, total, source) -> tuple[str, InlineKeyboardMarkup]:
+def render_chunk(chunk, offset, total) -> tuple[str, InlineKeyboardMarkup]:
     pages = max(1, (total + CHUNK - 1) // CHUNK)
     page = offset // CHUNK + 1
 
     lines = [
-        "┏━━━━━━━━━━━━━━━━━━━━━━━┓",
-        "┃  🔥 <b>T E R A B O X  ·  D L</b> 🔥  ┃",
-        "┗━━━━━━━━━━━━━━━━━━━━━━━┛",
+        "┏━━━━━━━━━━━━━━━━━━━━━━━━━┓",
+        "┃   🔥 <b>T E R A B O X</b> 🔥   ┃",
+        "┗━━━━━━━━━━━━━━━━━━━━━━━━━┛",
         "",
     ]
 
@@ -210,28 +206,27 @@ def render_chunk(chunk, offset, total, source) -> tuple[str, InlineKeyboardMarku
         lines.append(f"┌─ <b>#{idx:02d}</b>  {file_icon(name)}")
         lines.append(f"│  <code>{html.escape(_clip(name))}</code>")
         lines.append(f"│  💾 <b>{html.escape(size)}</b>  ·  {chip_line}")
-        lines.append(f"└{_div(20, '─')}")
+        lines.append(f"└{'─' * 20}")
         lines.append("")
 
         row = []
         if dl and dl != "N/A":
+            # fully colored emoji + bold text
             row.append(InlineKeyboardButton(
-                text=f"📥  Download  ·  #{idx}", url=dl))
+                text="📥 Download Now", url=dl))
         if st and st != "N/A":
+            # fully colored emoji + bold text
             row.append(InlineKeyboardButton(
-                text=f"🎬  Stream  ·  #{idx}", url=st))
+                text="🎬 Stream Now", url=st))
         if row:
             kb.row(*row)
 
-    lines.append(_div(22, "┈"))
+    lines.append("┈" * 24)
     lines.append(
         f"📦 <b>{total}</b> file{'s' if total != 1 else ''}"
         f"   ·   📄 page <b>{page}</b>/<b>{pages}</b>"
     )
-    lines.append(_div(22, "┈"))
-
-    if source:
-        kb.row(InlineKeyboardButton(text="🔗  Open original share", url=source))
+    lines.append("┈" * 24)
 
     return "\n".join(lines), kb.as_markup()
 
@@ -247,17 +242,14 @@ dp.include_router(router)
 @router.message(CommandStart())
 async def cmd_start(msg: Message):
     await msg.answer(
-        "┏━━━━━━━━━━━━━━━━━━━━━━━┓\n"
-        "┃  🔥 <b>T E R A B O X  B O T</b> 🔥  ┃\n"
-        "┗━━━━━━━━━━━━━━━━━━━━━━━┛\n"
+        "┏━━━━━━━━━━━━━━━━━━━━━━━━━┓\n"
+        "┃   🔥 <b>T E R A B O X</b> 🔥   ┃\n"
+        "┗━━━━━━━━━━━━━━━━━━━━━━━━━┛\n"
         "\n"
         "  <b>drop a share link. get links.</b>\n"
         "\n"
-        "  🔵  <b>Download</b>  —  save the file\n"
-        "  🔴  <b>Stream</b>    —  play instantly\n"
-        "\n"
-        + _div(22, "┈") + "\n"
-        "  <b>/help</b>   ·   <b>/id</b>\n"
+        "  🔵  <b>Download Now</b>  —  save file\n"
+        "  🔴  <b>Stream Now</b>    —  play instantly\n"
         "\n"
         "  <i>supported: terabox.com · 1024terabox.com\n"
         "  terabox.app · freeterabox.com · 4funbox.com</i>",
@@ -289,13 +281,10 @@ async def on_text(msg: Message):
         return
     COOLDOWN_BY_UID[uid] = now
 
+    # simple processing text
     status = await msg.reply(
-        "┏━━━━━━━━━━━━━━━━━━━━━━━┓\n"
-        "┃   ⚡ <b>S O L V I N G</b> ⚡        ┃\n"
-        "┗━━━━━━━━━━━━━━━━━━━━━━━┛\n"
-        "\n"
-        "  🔐 solving turnstile…\n"
-        "  ⏳ ~20s · hang tight",
+        "⏳ <b>Processing your link...</b>\n"
+        "<i>please wait ~20s</i>",
         parse_mode=ParseMode.HTML,
     )
 
@@ -305,12 +294,8 @@ async def on_text(msg: Message):
         LOG.exception("fetch failed")
         try:
             await status.edit_text(
-                "┏━━━━━━━━━━━━━━━━━━━━━━━┓\n"
-                "┃   ❌ <b>F A I L E D</b>            ┃\n"
-                "┗━━━━━━━━━━━━━━━━━━━━━━━┛\n"
-                "\n"
-                f"<code>{html.escape(str(e))[:600]}</code>\n"
-                "\n"
+                "❌ <b>Extraction Failed</b>\n\n"
+                f"<code>{html.escape(str(e))[:600]}</code>\n\n"
                 "<i>link expired / private / solver down</i>",
                 parse_mode=ParseMode.HTML,
             )
@@ -325,7 +310,7 @@ async def on_text(msg: Message):
 
     total = len(files)
     for start in range(0, total, CHUNK):
-        text, kb = render_chunk(files[start:start + CHUNK], start, total, url)
+        text, kb = render_chunk(files[start:start + CHUNK], start, total)
         try:
             await msg.answer(text, parse_mode=ParseMode.HTML,
                              reply_markup=kb, disable_web_page_preview=True)
