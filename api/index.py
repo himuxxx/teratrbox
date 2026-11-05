@@ -1,10 +1,11 @@
-# api/index.py — Terabox -> Telegram bot (Ultra UI + ENV READY)
+# api/index.py — Terabox -> Telegram bot (Ultra UI + Live Progress + ENV READY)
 import os
 import html
 import logging
 import re
 import secrets
 import time
+import asyncio
 from typing import Optional
 
 import requests
@@ -187,7 +188,7 @@ def render_chunk(chunk, offset, total) -> tuple[str, InlineKeyboardMarkup]:
     page = offset // CHUNK + 1
 
     lines = [
-        "          🔥 <b>T E R A B O X</b> 🔥          ",
+        "          🔥 <b>T E R A B O X - B O T</b> 🔥          ",
         "",
     ]
 
@@ -263,7 +264,7 @@ async def cmd_start(msg: Message):
 
     await msg.answer(
         "🌟 <b>W E L C O M E   T O</b> 🌟\n"
-        "        🔥 <b>T E R A B O X</b> 🔥\n\n"
+        "        🔥 <b>T E R A B O X - B O T</b> 🔥\n\n"
         "<blockquote><b>STATUS:</b> 🟢 System Online\n"
         "<b>MODE:</b> ⚡ Turbo Extraction\n"
         "<b>SECURITY:</b> 🔐 Bypass Active</blockquote>\n\n"
@@ -339,13 +340,49 @@ async def on_text(msg: Message):
 
     status = await msg.reply(
         "⏳ <b>Processing your link...</b>\n"
-        "<i>please wait ~20s</i>",
+        "🔥 <b>T E R A B O X - B O T</b> 🔥\n\n"
+        "🔐 <b>Bypassing Cloudflare...</b>\n"
+        "<code>[██░░░░░░░░] 20%</code>",
         parse_mode=ParseMode.HTML,
     )
 
+    stop_progress = asyncio.Event()
+
+    async def update_progress():
+        start = time.time()
+        stages = [
+            (0, "🔐 <b>Bypassing Cloudflare...</b>", "[██░░░░░░░░] 20%"),
+            (5, "⚙️ <b>Extracting metadata...</b>", "[█████░░░░░] 50%"),
+            (10, "🔗 <b>Generating links...</b>", "[████████░░] 80%"),
+            (15, "✨ <b>Almost done...</b>", "[██████████] 99%"),
+        ]
+        current_stage = 0
+        
+        while not stop_progress.is_set():
+            elapsed = time.time() - start
+            if current_stage < len(stages) and elapsed >= stages[current_stage][0]:
+                _, text, bar = stages[current_stage]
+                try:
+                    await status.edit_text(
+                        f"⏳ <b>Processing your link...</b>\n"
+                        f"🔥 <b>T E R A B O X - B O T</b> 🔥\n\n"
+                        f"{text}\n"
+                        f"<code>{bar}</code>",
+                        parse_mode=ParseMode.HTML
+                    )
+                except Exception:
+                    pass
+                current_stage += 1
+            await asyncio.sleep(0.5)
+
+    progress_task = asyncio.create_task(update_progress())
+
     try:
-        files = fetch_share_meta(url)
+        # Run blocking requests call in a separate thread
+        files = await asyncio.to_thread(fetch_share_meta, url)
     except Exception as e:
+        stop_progress.set()
+        progress_task.cancel()
         LOG.exception("fetch failed")
         try:
             await status.edit_text(
@@ -357,6 +394,9 @@ async def on_text(msg: Message):
         except Exception:
             pass
         return
+
+    stop_progress.set()
+    progress_task.cancel()
 
     try:
         await status.delete()
