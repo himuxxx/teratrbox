@@ -1,8 +1,8 @@
-# api/webhook.py — Vercel Python entry. routes Telegram updates into aiogram.
+# api/index.py — Vercel FastAPI entrypoint. auto-detected by vercel-python runtime.
 from fastapi import FastAPI, Request, Response
 from aiogram.types import Update
 
-from bot import build_dispatcher, WEBHOOK_SECRET
+from bot import build_dispatcher, WEBHOOK_SECRET   # same dir -> works in serverless bundle
 
 app = FastAPI()
 bot, dp = build_dispatcher()
@@ -12,7 +12,6 @@ bot, dp = build_dispatcher()
 async def webhook(request: Request) -> Response:
     if request.headers.get("X-Telegram-Bot-Api-Secret-Token") != WEBHOOK_SECRET:
         return Response(status_code=403)
-
     data = await request.json()
     update = Update.model_validate(data, context={"bot": bot})
     await dp.feed_update(bot, update)
