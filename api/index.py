@@ -1,6 +1,5 @@
-# api/index.py — Terabox -> Telegram bot (original external solver)
-# flow: solver /solve -> teraboxdl.site /api/verify -> /api/proxy
-
+# api/index.py — Terabox -> Telegram bot (SECURE, ZERO HARDCODED SECRETS)
+import os
 import html
 import logging
 import re
@@ -23,14 +22,17 @@ from aiogram.types import (
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 # ================================================================
-# CONFIG
+# CONFIG (READ STRICTLY FROM ENVIRONMENT VARIABLES)
 # ================================================================
-BOT_TOKEN      = "8426186448:AAE2TXh2TfgEWK2CDN96DfVuDmYfNLe-IkA"
-WEBHOOK_SECRET = "tb_71x_smith_secret"
+BOT_TOKEN      = os.environ.get("BOT_TOKEN", "")
+WEBHOOK_SECRET = os.environ.get("WEBHOOK_SECRET", "")
+SOLVER_URL     = os.environ.get("SOLVER_URL", "")
+TB_BASE        = os.environ.get("TB_BASE", "")
+TS_SITEKEY     = os.environ.get("TS_SITEKEY", "")
 
-SOLVER_URL = "http://85.115.209.225:8191"
-TB_BASE    = "https://teraboxdl.site"
-TS_SITEKEY = "0x4AAAAAAFZJOCzA6dP3BIYH"
+# Safety check: Vercel-e env var set na thakle bot crash korbe, kintu secret leak korbe na
+if not all([BOT_TOKEN, WEBHOOK_SECRET, SOLVER_URL, TB_BASE, TS_SITEKEY]):
+    raise ValueError("Missing one or more environment variables! Please set them in Vercel.")
 
 UA = ("Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/137.0.0.0 Mobile Safari/537.36")
