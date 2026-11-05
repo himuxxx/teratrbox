@@ -1,5 +1,6 @@
 # api/index.py — Terabox -> Telegram bot (single-file, Vercel serverless)
 # Python 3.12, aiogram 3.13, fastapi, requests
+# deploy: vercel, zero config, api/index.py auto-detected
 
 import html
 import logging
@@ -49,9 +50,9 @@ URL_RE = re.compile(r"https?://[^\s<>\"']+", re.IGNORECASE)
 LOG = logging.getLogger("terabot")
 LOG.setLevel(logging.INFO)
 if not LOG.handlers:
-    h = logging.StreamHandler()
-    h.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
-    LOG.addHandler(h)
+    _h = logging.StreamHandler()
+    _h.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
+    LOG.addHandler(_h)
 
 COOLDOWN_BY_UID: dict[int, float] = {}
 
@@ -342,6 +343,15 @@ async def on_text(msg: Message):
 # fastapi entrypoint
 # ================================================================
 app = FastAPI()
+
+
+@app.get("/")
+async def root():
+    return {
+        "service": "terabox-bot",
+        "status":  "ok",
+        "webhook": "/api/webhook",
+    }
 
 
 @app.post("/api/webhook")
