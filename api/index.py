@@ -1,6 +1,5 @@
-# api/index.py — Terabox -> Telegram bot (solver-only path)
+# api/index.py — Terabox -> Telegram bot (solver-only path, fancy UI)
 # flow: solver /solve -> teraboxdl.site /api/verify -> /api/proxy
-# Chrome Vercel e lage na — solver alada host e (85.115.209.225:8191)
 
 import html
 import logging
@@ -35,7 +34,6 @@ UA = ("Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/137.0.0.0 Mobile Safari/537.36")
 
 SOLVER_TIMEOUT = 90
-HTTP_TIMEOUT   = 45
 COOLDOWN       = 5.0
 CHUNK          = 5
 
@@ -88,8 +86,16 @@ def file_icon(name: str) -> str:
     return "📦"
 
 
+def _clip(s: str, n: int = 38) -> str:
+    s = s or ""
+    return s if len(s) <= n else s[: n - 3] + "…"
+
+
+def _div(width: int = 22, char: str = "┈") -> str:
+    return char * width
+
 # ================================================================
-# solver flow — exactly like TeraboxCLI.py
+# solver flow
 # ================================================================
 def _solve_turnstile(retries: int = 3) -> Optional[str]:
     for i in range(retries):
@@ -117,17 +123,14 @@ def fetch_share_meta(share_url: str) -> list[dict]:
     s = requests.Session()
     s.headers.update({"User-Agent": UA, "Accept": "*/*"})
 
-    # [1] base
     r = s.get(TB_BASE + "/", timeout=30)
     if r.status_code != 200:
         raise RuntimeError(f"base HTTP {r.status_code}")
 
-    # [2] turnstile
     token = _solve_turnstile()
     if not token:
         raise RuntimeError("solver returned no token (is the remote solver up?)")
 
-    # [3] verify
     s.post(
         TB_BASE + "/api/verify",
         json={"token": token},
@@ -141,7 +144,6 @@ def fetch_share_meta(share_url: str) -> list[dict]:
     if "tdl_pass" not in s.cookies:
         raise RuntimeError("verify rejected (no tdl_pass cookie)")
 
-    # [4] proxy
     r = s.post(
         TB_BASE + "/api/proxy",
         json={"url": share_url},
@@ -176,33 +178,61 @@ def fetch_share_meta(share_url: str) -> list[dict]:
     return files
 
 # ================================================================
-# render
+# render — fancy cards
 # ================================================================
 def render_chunk(chunk, offset, total, source) -> tuple[str, InlineKeyboardMarkup]:
+    pages = max(1, (total + CHUNK - 1) // CHUNK)
+    page = offset // CHUNK + 1
+
     lines = [
-        "╭───────────────────────╮",
-        "   <b>T E R A B O X  ·  D L</b>",
-        "╰───────────────────────╯",
-        "",
-        f"📦 <b>{total}</b> file(s)  ·  showing <b>{offset + 1}–{offset + len(chunk)}</b>",
+        "┏━━━━━━━━━━━━━━━━━━━━━━━┓",
+        "┃  🔥 <b>T E R A B O X  ·  D L</b> 🔥  ┃",
+        "┗━━━━━━━━━━━━━━━━━━━━━━━┛",
         "",
     ]
+
     kb = InlineKeyboardBuilder()
+
     for i, f in enumerate(chunk):
         idx = offset + i + 1
-        lines.append(f"<b>{idx}.</b>  {file_icon(f['name'])} <code>{html.escape(f['name'])}</code>")
-        lines.append(f"       └ <i>{html.escape(f['size'])}</i>")
+        name = f.get("name") or "unknown"
+        size = f.get("size") or "?"
+        dl = f.get("direct") or ""
+        st = f.get("stream") or ""
+
+        chips = []
+        if dl and dl != "N/A":
+            chips.append("🔵 <b>DL</b>")
+        if st and st != "N/A":
+            chips.append("🔴 <b>STR</b>")
+        chip_line = "  ·  ".join(chips) if chips else "<i>no links</i>"
+
+        lines.append(f"┌─ <b>#{idx:02d}</b>  {file_icon(name)}")
+        lines.append(f"│  <code>{html.escape(_clip(name))}</code>")
+        lines.append(f"│  💾 <b>{html.escape(size)}</b>  ·  {chip_line}")
+        lines.append(f"└{_div(20, '─')}")
         lines.append("")
-        dl, st = f.get("direct") or "", f.get("stream") or ""
+
         row = []
         if dl and dl != "N/A":
-            row.append(InlineKeyboardButton(text=f"📥  {idx}", url=dl))
+            row.append(InlineKeyboardButton(
+                text=f"📥  Download  ·  #{idx}", url=dl))
         if st and st != "N/A":
-            row.append(InlineKeyboardButton(text=f"▶️  {idx}", url=st))
+            row.append(InlineKeyboardButton(
+                text=f"🎬  Stream  ·  #{idx}", url=st))
         if row:
             kb.row(*row)
+
+    lines.append(_div(22, "┈"))
+    lines.append(
+        f"📦 <b>{total}</b> file{'s' if total != 1 else ''}"
+        f"   ·   📄 page <b>{page}</b>/<b>{pages}</b>"
+    )
+    lines.append(_div(22, "┈"))
+
     if source:
-        kb.row(InlineKeyboardButton(text="🔗  open source", url=source))
+        kb.row(InlineKeyboardButton(text="🔗  Open original share", url=source))
+
     return "\n".join(lines), kb.as_markup()
 
 # ================================================================
@@ -217,12 +247,20 @@ dp.include_router(router)
 @router.message(CommandStart())
 async def cmd_start(msg: Message):
     await msg.answer(
-        "╭───────────────────────╮\n"
-        "   <b>T E R A B O X  ·  B O T</b>\n"
-        "╰───────────────────────╯\n\n"
-        "send a terabox share link.\n"
-        "i'll return <b>direct download</b> and <b>stream</b> buttons per file.\n\n"
-        "<b>/help</b>  ·  <b>/id</b>",
+        "┏━━━━━━━━━━━━━━━━━━━━━━━┓\n"
+        "┃  🔥 <b>T E R A B O X  B O T</b> 🔥  ┃\n"
+        "┗━━━━━━━━━━━━━━━━━━━━━━━┛\n"
+        "\n"
+        "  <b>drop a share link. get links.</b>\n"
+        "\n"
+        "  🔵  <b>Download</b>  —  save the file\n"
+        "  🔴  <b>Stream</b>    —  play instantly\n"
+        "\n"
+        + _div(22, "┈") + "\n"
+        "  <b>/help</b>   ·   <b>/id</b>\n"
+        "\n"
+        "  <i>supported: terabox.com · 1024terabox.com\n"
+        "  terabox.app · freeterabox.com · 4funbox.com</i>",
         parse_mode=ParseMode.HTML,
     )
 
@@ -242,6 +280,7 @@ async def on_text(msg: Message):
     url = find_terabox_url(msg.text or "")
     if not url:
         return
+
     uid = msg.from_user.id
     now = time.time()
     last = COOLDOWN_BY_UID.get(uid, 0)
@@ -250,17 +289,29 @@ async def on_text(msg: Message):
         return
     COOLDOWN_BY_UID[uid] = now
 
-    status = await msg.reply("<b>⚡ extracting…</b>", parse_mode=ParseMode.HTML)
+    status = await msg.reply(
+        "┏━━━━━━━━━━━━━━━━━━━━━━━┓\n"
+        "┃   ⚡ <b>S O L V I N G</b> ⚡        ┃\n"
+        "┗━━━━━━━━━━━━━━━━━━━━━━━┛\n"
+        "\n"
+        "  🔐 solving turnstile…\n"
+        "  ⏳ ~20s · hang tight",
+        parse_mode=ParseMode.HTML,
+    )
+
     try:
         files = fetch_share_meta(url)
     except Exception as e:
         LOG.exception("fetch failed")
         try:
             await status.edit_text(
-                "╭───────────────────────╮\n"
-                "   <b>E X T R A C T   F A I L E D</b>\n"
-                "╰───────────────────────╯\n\n"
-                f"<code>{html.escape(str(e))[:700]}</code>",
+                "┏━━━━━━━━━━━━━━━━━━━━━━━┓\n"
+                "┃   ❌ <b>F A I L E D</b>            ┃\n"
+                "┗━━━━━━━━━━━━━━━━━━━━━━━┛\n"
+                "\n"
+                f"<code>{html.escape(str(e))[:600]}</code>\n"
+                "\n"
+                "<i>link expired / private / solver down</i>",
                 parse_mode=ParseMode.HTML,
             )
         except Exception:
