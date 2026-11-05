@@ -1,4 +1,4 @@
-# api/index.py — Terabox -> Telegram bot (SECURE, ZERO HARDCODED SECRETS)
+# api/index.py — Terabox -> Telegram bot (Ultra UI + ENV READY)
 import os
 import html
 import logging
@@ -30,7 +30,6 @@ SOLVER_URL     = os.environ.get("SOLVER_URL", "")
 TB_BASE        = os.environ.get("TB_BASE", "")
 TS_SITEKEY     = os.environ.get("TS_SITEKEY", "")
 
-# Safety check: Vercel-e env var set na thakle bot crash korbe, kintu secret leak korbe na
 if not all([BOT_TOKEN, WEBHOOK_SECRET, SOLVER_URL, TB_BASE, TS_SITEKEY]):
     raise ValueError("Missing one or more environment variables! Please set them in Vercel.")
 
@@ -255,25 +254,57 @@ dp.include_router(router)
 
 @router.message(CommandStart())
 async def cmd_start(msg: Message):
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="📖 How to use", callback_data="help"),
+            InlineKeyboardButton(text="👨‍💻 Developer", url="https://t.me/shakib2016")
+        ]
+    ])
+
     await msg.answer(
-        "          🔥 <b>T E R A B O X</b> 🔥          \n\n"
-        "  <b>drop a share link. get links.</b>\n\n"
-        "  🔵  <b>Download Now</b>  —  save file\n"
-        "  🔴  <b>Stream Now</b>    —  play instantly\n\n"
-        "  <i>supported: terabox.com · 1024terabox.com\n"
-        "  terabox.app · freeterabox.com · 4funbox.com</i>",
+        "🌟 <b>W E L C O M E   T O</b> 🌟\n"
+        "        🔥 <b>T E R A B O X</b> 🔥\n\n"
+        "<blockquote><b>STATUS:</b> 🟢 System Online\n"
+        "<b>MODE:</b> ⚡ Turbo Extraction\n"
+        "<b>SECURITY:</b> 🔐 Bypass Active</blockquote>\n\n"
+        "<blockquote>🔵 <b>Download</b> — <i>Save any file to your device.</i>\n"
+        "🔴 <b>Stream</b> — <i>Watch instantly without downloading.</i></blockquote>\n\n"
+        "⚡ <i>Send a Terabox share link to extract...</i>",
         parse_mode=ParseMode.HTML,
+        reply_markup=kb
     )
 
 
 @router.message(Command("help"))
 async def cmd_help(msg: Message):
-    await cmd_start(msg)
+    await msg.answer(
+        "📖 <b>How to use this bot:</b>\n\n"
+        "1️⃣ Copy any Terabox link (terabox.com, 1024terabox.com, etc.)\n"
+        "2️⃣ Paste it here in the chat.\n"
+        "3️⃣ Wait ~20s for the solver.\n"
+        "4️⃣ Use <b>📥 Download</b> or <b>🎬 Stream</b> buttons.\n\n"
+        "⚠️ <i>Note: Links are session-bound and may expire after a few hours.</i>",
+        parse_mode=ParseMode.HTML
+    )
 
 
 @router.message(Command("id"))
 async def cmd_id(msg: Message):
     await msg.answer(f"<code>{msg.from_user.id}</code>", parse_mode=ParseMode.HTML)
+
+
+@router.callback_query(F.data == "help")
+async def cb_help(cb: CallbackQuery):
+    await cb.message.answer(
+        "📖 <b>How to use this bot:</b>\n\n"
+        "1️⃣ Copy any Terabox link (terabox.com, 1024terabox.com, etc.)\n"
+        "2️⃣ Paste it here in the chat.\n"
+        "3️⃣ Wait ~20s for the solver.\n"
+        "4️⃣ Use <b>📥 Download</b> or <b>🎬 Stream</b> buttons.\n\n"
+        "⚠️ <i>Note: Links are session-bound and may expire after a few hours.</i>",
+        parse_mode=ParseMode.HTML
+    )
+    await cb.answer()
 
 
 @router.callback_query(F.data.startswith("copy:"))
